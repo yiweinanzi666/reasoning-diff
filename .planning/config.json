@@ -4,9 +4,10 @@
   "parallelization": false,
   "commit_docs": true,
   "model_profile": "inherit",
-  "workflow": {"research": true, "plan_check": true, "verifier": true, "compact_content": false},
+  "runtime": "codex",
+  "resolve_model_ids": "omit",
+  "workflow": {"research": true, "plan_check": true, "verifier": true, "compact_content": false, "auto_advance": false, "_auto_chain_active": false},
   "plan_review": {"source_grounding": true},
   "ship": {"pr_body_sections": []},
-  "response_language": "zh-CN",
-  "authorization": "User explicitly requested complete implementation and self-checking; routine document/implementation approval gates are unnecessary."
+  "response_language": "zh-CN"
 }

@@ -12,3 +12,4 @@ data/
 runs/
 models/
 .env
+.planning/research/.cache/
