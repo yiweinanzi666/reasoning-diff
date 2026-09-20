@@ -1,8 +1,11 @@
 # 技术栈与模型适配契约
 
-**项目：** Reasoning Diff  
-**核查日期：** 2026-09-20  
-**范围：** Qwen3-8B、DeepSeek-R1-Distill-Qwen-7B 的 HF 接口、tokenizer、residual hook、缓存、随机流及 CPU 集成验证。  
+**项目：** Reasoning Diff
+
+**核查日期：** 2026-09-20
+
+**范围：** Qwen3-8B、DeepSeek-R1-Distill-Qwen-7B 的 HF 接口、tokenizer、residual hook、缓存、随机流及 CPU 集成验证。
+
 **置信度：** MEDIUM。GSD `research-plan` 指向 Context7，但本环境没有对应 MCP/CLI，故回退官方网页、固定版本源码和本机验证；`classify-confidence --provider websearch --verified` 返回 MEDIUM。下文区分官方事实、实现建议与实际完成的接口测试。
 
 ## 推荐并已核查的版本

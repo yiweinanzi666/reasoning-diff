@@ -1,8 +1,11 @@
 # Architecture Patterns — Reasoning Diff
 
-**Domain:** 前提依赖表征与干预的离线科学实验  
-**Researched:** 2026-09-20  
-**Confidence:** MEDIUM；官方接口已核对，具体模型 hook 与科学有效性仍需后续验证。  
+**Domain:** 前提依赖表征与干预的离线科学实验
+
+**Researched:** 2026-09-20
+
+**Confidence:** MEDIUM；官方接口已核对，具体模型 hook 与科学有效性仍需后续验证。
+
 **Scope:** 本次仅初始化文档；以下为同事后续实现的契约，不表示代码、数据或实验已经完成。
 
 ## Recommended Architecture
@@ -208,4 +211,3 @@ Report 同时输出机器可读 JSON/CSV 和简短 Markdown。Gate 0–2 的未�
 - 产物与执行：[NumPy load](https://numpy.org/doc/stable/reference/generated/numpy.load.html)、[HumanEval execution](https://github.com/openai/human-eval/blob/master/human_eval/execution.py)、[HumanEval README](https://github.com/openai/human-eval/blob/master/README.md)。
 - 已调用 research-plan；其选择的 Context7/Jina 与 ctx7 CLI 不可用，使用官方站点 websearch 回退并缓存摘要。classify-confidence(provider=websearch, verified=true) 返回 **MEDIUM**。
 - 上述分层、字段、拆分与顺序均为依据项目约束和官方接口作出的架构建议，置信度 MEDIUM，非已验证实现。待专项验证：Qwen 各层 hook/KV 行为、生成 ID/字符映射、自然语言 DAG 标注可靠性、样本量与校准条件、隔离后端。
-
