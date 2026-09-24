@@ -26,18 +26,20 @@ def readout_layer_index(n_layers: int) -> int:
     return in_band[len(in_band) // 2]
 
 
-def offsets_from_tokenizer(tokenizer, token_ids: list[int], text: str) -> list[list[int]]:
+def offsets_from_tokenizer(tokenizer, token_ids: list[int], text: str, return_failures: bool = False):
     offsets = []
+    failures = []
     cursor = 0
-    for tid in token_ids:
+    for index, tid in enumerate(token_ids):
         piece = tokenizer.decode([tid], skip_special_tokens=True)
         loc = text.find(piece, cursor) if piece else cursor
         if loc < 0:
+            failures.append({"token_index": index, "token_id": int(tid), "piece": piece, "cursor": cursor})
             loc = cursor
         end = loc + max(len(piece), 0)
         offsets.append([loc, end if end > loc else loc])
         cursor = max(end, cursor)
-    return offsets
+    return (offsets, failures) if return_failures else offsets
 
 
 def span_token_indices(offsets: list[list[int]], start: int, end: int) -> list[int]:

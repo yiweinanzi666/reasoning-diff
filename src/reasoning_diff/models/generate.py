@@ -136,7 +136,7 @@ def generate_frozen_trace(
     top_p: float = 1.0,
     device: str | None = None,
 ):
-    from ..events import extract_answer, parse_events
+    from ..events import answers_equal, extract_answer, parse_events
     from ..schema import Cost, Trace
     from .adapters import card, load_frozen
     from .tokenize import offsets_from_tokenizer
@@ -185,9 +185,11 @@ def generate_frozen_trace(
     generated_ids = decoded["generated_ids"]
     text = tokenizer.decode(full_ids, skip_special_tokens=False)
     gen_text = tokenizer.decode(generated_ids, skip_special_tokens=False)
+    offset_failures = []
     try:
-        offsets = offsets_from_tokenizer(tokenizer, full_ids, text)
-    except Exception:
+        offsets, offset_failures = offsets_from_tokenizer(tokenizer, full_ids, text, return_failures=True)
+    except Exception as exc:
+        offset_failures = [{"error": type(exc).__name__, "message": str(exc)}]
         offsets = [[i, i + 1] for i in range(len(full_ids))]
     rid = run_id or f"trace:{task.task_id}:{seed}"
     events = parse_events(gen_text, task)
@@ -218,7 +220,7 @@ def generate_frozen_trace(
         offsets=offsets,
         events=events,
         answer=pred,
-        correct=None if pred is None or gold is None else pred == gold,
+        correct=answers_equal(pred, gold, task.answer_spec.kind),
         cost=Cost(prefill_tokens=len(prompt_ids), decode_tokens=len(generated_ids), elapsed_seconds=elapsed),
         run_id=rid,
         record_id=rid,
@@ -232,7 +234,10 @@ def generate_frozen_trace(
             "prompt_text": prompt,
             "parse_status": "ok" if events else "parse_failed",
             "parse_region": "generated",
+            "offset_reconstruction_failures": offset_failures,
+            "boundary_status": "ok" if not offset_failures else "fallback_cursor",
             "forced_target": False,
+            "evidence_status": "model_generated",
             "device": runtime.get("device") or decoded.get("device"),
             "dtype": runtime.get("dtype"),
             "think_ids": runtime.get("think_ids") or list(info.get("think_ids") or []),
@@ -273,8 +278,8 @@ def generate_task_trace(
             top_p=top_p,
             device=device,
         )
-    from ..events import extract_answer, parse_events
-    from ..schema import Trace
+    from ..events import answers_equal, extract_answer, parse_events
+    from ..schema import Cost, Trace
     from .tiny import build_tiny
     from .tokenize import decode_ids, encode_text
 
@@ -287,6 +292,7 @@ def generate_task_trace(
         model = build_tiny(kind)
     g = torch.Generator().manual_seed(seed)
     ids = torch.tensor([prompt_ids], dtype=torch.long)
+    started = time.perf_counter()
     decoded = decode_loop(model, ids, g, max_new=max_new, temperature=temperature, top_k=top_k, top_p=top_p)
     gen_text = decode_ids(decoded["generated_ids"])
     token_ids = decoded["token_ids"]
@@ -294,6 +300,7 @@ def generate_task_trace(
     assigned = ""
     if target:
         token_ids, assigned = append_target_assignment(model, token_ids, target, g)
+    elapsed = time.perf_counter() - started
     full_text = prompt + gen_text + assigned
     offsets = [[i, i + 1] for i in range(len(full_text))]
     if len(offsets) < len(token_ids):
@@ -333,7 +340,8 @@ def generate_task_trace(
         offsets=offsets,
         events=events,
         answer=pred,
-        correct=None if pred is None or gold is None else pred == gold,
+        correct=answers_equal(pred, gold, task.answer_spec.kind),
+        cost=Cost(prefill_tokens=len(prompt_ids), decode_tokens=len(generated), elapsed_seconds=elapsed),
         run_id=rid,
         record_id=rid,
         metadata={
@@ -345,6 +353,8 @@ def generate_task_trace(
             "prompt_text": prompt,
             "parse_status": parse_status,
             "target_assignment": assigned,
+            "forced_target": bool(assigned),
+            "evidence_status": "synthetic_target_assignment" if assigned else "model_generated",
             "parse_region": "generated",
         },
     )

@@ -85,6 +85,16 @@ def mask_prefix(mask: str, new_prefix: str, slots: list[str]) -> str:
     return new_prefix
 
 
+def _unmatched_slots(mask: str, new_prefix: str, slots: list[str]) -> list[str]:
+    if mask != "task_oracle":
+        return []
+    return [
+        slot
+        for slot in slots
+        if re.search(rf"(?<!\w){re.escape(slot)}\s*=\s*{NUMBER}", new_prefix, flags=re.I) is None
+    ]
+
+
 def execute_repair_tiny(
     mask: str,
     slots: list[str],
@@ -237,6 +247,7 @@ def run_repair(
         extra = result.get("extra_prefill_tokens", len(result.get("prefix_token_ids") or []))
         hidden = result.get("prefill_hidden")
         prefilled = _hidden_is_prefill(hidden)
+        unmatched = _unmatched_slots(mask, new_prefix, slots) if prefilled else []
         return RepairRecord(
             mask=mask,
             slots=list(slots),
@@ -244,11 +255,12 @@ def run_repair(
             generated_tokens=n_gen,
             extra_prefill_tokens=extra if prefilled else None,
             refilled_prefix=prefilled,
-            failures=[] if prefilled else ["execute_without_prefill"],
+            failures=([] if prefilled else ["execute_without_prefill"])
+            + ([f"slot_not_found:{slot}" for slot in unmatched] if unmatched else []),
             record_id="",
             run_id=run_id,
             base_group_id=base_group_id,
-            status="ok" if prefilled else "prefill_unavailable",
+            status="mask_unmatched" if unmatched else ("ok" if prefilled else "prefill_unavailable"),
             k=k,
             text=str(result.get("text") or result.get("masked_prefix") or ""),
         )
@@ -294,13 +306,14 @@ def consecutive_repairs(
     **kwargs,
 ) -> list[RepairRecord]:
     rows = []
-    current = new_prefix
+    # Each k is an independent intervention on the same retained prefix.
+    # Feeding the previous masked text into the next round compounds markers
+    # and changes the estimand from "mask k slots" to "mask k slots plus all
+    # prior edits".
     for k in range(1, k_max + 1):
         use_slots = slots[:k] if slots else [str(k)]
-        rec = run_repair(mask, use_slots, original_tokens, current, execute=execute, k=k, **kwargs)
+        rec = run_repair(mask, use_slots, original_tokens, new_prefix, execute=execute, k=k, **kwargs)
         rows.append(rec)
-        if rec.text:
-            current = rec.text
     return rows
 
 

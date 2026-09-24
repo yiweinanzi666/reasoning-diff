@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from dataclasses import fields
@@ -177,11 +178,23 @@ def _write_stage(
     extras = [Path(item) for item in (extra_files or []) if Path(item).exists()]
     files = [path, *extras]
     merged = {"command": name, **(config or {})}
+    source_kinds = {}
+    for upstream_dir in (in_dir, extra_dir):
+        if upstream_dir is None:
+            continue
+        upstream_spec = Path(upstream_dir) / "run_spec.json"
+        if upstream_spec.exists():
+            try:
+                source_kinds.update(read_json(upstream_spec).get("source_kinds") or {})
+            except (OSError, TypeError, ValueError):
+                pass
+    if not source_kinds:
+        source_kinds = {"cli": "fixture"}
     write_run_spec(
         out,
         {
             "config": merged,
-            "source_kinds": {"cli": "fixture"},
+            "source_kinds": source_kinds,
             "rng": {"stream": name},
             "input_hashes": hashes,
         },
@@ -293,6 +306,7 @@ def _observations(task, base_trace, edit_trace, edit, rng_pair: str, run_id: str
                 run_id=run_id,
                 record_id=f"{run_id}:parse_failed:{premise_id}",
                 node_id="",
+                task_id=task.task_id,
             )
         )
         return rows
@@ -316,6 +330,7 @@ def _observations(task, base_trace, edit_trace, edit, rng_pair: str, run_id: str
                 run_id=run_id,
                 record_id=f"{run_id}:{ident}:{edit_id}:{premise_id}",
                 node_id=left.node_id,
+                task_id=task.task_id,
             )
         )
     for key in aligned["removed"]:
@@ -337,6 +352,7 @@ def _observations(task, base_trace, edit_trace, edit, rng_pair: str, run_id: str
                 run_id=run_id,
                 record_id=f"{run_id}:{key}:{edit_id}:removed",
                 node_id=key.split(":")[0] if key else "",
+                task_id=task.task_id,
             )
         )
     for key in aligned["added"]:
@@ -358,6 +374,7 @@ def _observations(task, base_trace, edit_trace, edit, rng_pair: str, run_id: str
                 run_id=run_id,
                 record_id=f"{run_id}:{key}:{edit_id}:added",
                 node_id=key.split(":")[0] if key else "",
+                task_id=task.task_id,
             )
         )
     return rows
@@ -426,8 +443,13 @@ def cmd_prepare(args: argparse.Namespace) -> int:
 
         ops = getattr(args, "t1_ops", None)
         if ops:
-            validate_t1_prepare_config({"ops": ops, "n_problems": 500, "mod": 23})
+            declared_n = len(tasks)
+            if task.source_kind == "official":
+                validate_t1_prepare_config({"ops": ops, "n_problems": declared_n, "mod": 23})
+            else:
+                config["t1_protocol_status"] = "fixture_pilot_n_problems_mismatch"
             config["t1_ops"] = list(ops)
+            config["t1_n_problems"] = declared_n
         base_trace = generate_task_trace(task, seed=0, run_id="trace-base", **gen_kw)
         seed1_trace = generate_task_trace(task, seed=1, run_id="trace-t0p", **gen_kw)
         edit_trace = generate_task_trace(edit.task, seed=0, run_id="trace-edit", **gen_kw)
@@ -465,6 +487,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
                         run_id="prepare-sham",
                         record_id=f"prepare-sham:{left.identity.key()}",
                         node_id=left.node_id,
+                        task_id=task.task_id,
                     )
                 )
     else:
@@ -496,6 +519,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
                         run_id="prepare-sham",
                         record_id=f"prepare-sham:{left.identity.key()}",
                         node_id=left.node_id,
+                        task_id=task.task_id,
                     )
                 )
     extra_scan_edits = list(_allowed_edits(task))
@@ -560,8 +584,10 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     labels = build_labels(observations, anc, sham_protocol=sham_protocol)
     for lab in labels:
         lab.run_id = "prepare"
-        lab.base_group_id = task.base_group_id
-        lab.record_id = f"prepare:{lab.event_id}:{lab.premise_id}"
+        if not lab.base_group_id:
+            lab.base_group_id = task.base_group_id
+        label_task = lab.task_id or lab.base_group_id or task.task_id
+        lab.record_id = f"prepare:{label_task}:{lab.event_id}:{lab.premise_id}"
     densities = event_density_sets(task, labels, sham_protocol)
     noise_pair = None
     if any(t.id == "trace-sham" for t in traces):
@@ -656,6 +682,12 @@ def cmd_collect(args: argparse.Namespace) -> int:
     if not traces:
         text = _trace_text(task)
         traces = [_synthetic_trace(task, text, "collect-0", 0)]
+    if any((trace.metadata or {}).get("forced_target") for trace in traces):
+        collect_cfg["evidence_status"] = "fixture/tiny_only_forced_target"
+    elif any((trace.metadata or {}).get("evidence_status") == "synthetic_target_assignment" for trace in traces):
+        collect_cfg["evidence_status"] = "fixture/tiny_only_synthetic_assignment"
+    else:
+        collect_cfg["evidence_status"] = "model_generated"
     out.mkdir(parents=True, exist_ok=True)
     features = out / "features.npz"
     frozen_runtime = {}
@@ -679,7 +711,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
                 "dtype": packed_model.get("dtype"),
             }
         h_blocks, pre_s, pre_v, post, event_rows = [], [], [], [], []
-        embed = None
+        embed_blocks = []
+        embed_keys = []
         meta = {}
         tasks_by_id = {item.task_id: item for item in tasks} if tasks else {task.task_id: task}
         for trace in traces:
@@ -700,12 +733,14 @@ def cmd_collect(args: argparse.Namespace) -> int:
                 model=frozen_model,
                 weight_source="frozen_checkpoint" if frozen_model is not None else "random_init",
                 hidden_layer=frozen_layer,
+                prompt_text=(trace.metadata or {}).get("prompt_text"),
             )
             if eval_mode == "scientific" and (packed.get("h_position") != "pre_step" or packed["H"].shape[0] == 0):
                 raise ValueError("scientific collect requires step-boundary events")
             h_blocks.append(packed["H"])
-            if embed is None:
-                embed = packed["E"]
+            for premise, vector in zip(owner.premises, packed["E"]):
+                embed_blocks.append(np.asarray(vector, dtype=float))
+                embed_keys.append((trace.task_id, premise.premise_id))
             pre_s.append(packed["H_pre_step"])
             pre_v.append(packed["H_pre_value"])
             post.append(packed["H_post_step"])
@@ -713,7 +748,32 @@ def cmd_collect(args: argparse.Namespace) -> int:
                 event_rows.append({"trace_id": trace.id, "node_id": node_id, "identity_key": ident, "event_id": ident, "task_id": trace.task_id})
             meta = packed
         hidden = np.vstack([b for b in h_blocks if b.size]) if any(b.size for b in h_blocks) else np.zeros((0, 1))
-        embed = embed if embed is not None else np.zeros((1, 1))
+        if embed_blocks:
+            grouped_embed = {}
+            grouped_tasks = {}
+            for key, vector in zip(embed_keys, embed_blocks):
+                premise_id = key[1]
+                grouped_embed.setdefault(premise_id, []).append(vector)
+                grouped_tasks.setdefault(premise_id, set()).add(key[0])
+            embed_ids = list(grouped_embed)
+            embed = np.stack([np.nanmean(np.stack(grouped_embed[pid]), axis=0) for pid in embed_ids])
+            write_jsonl(
+                out / "premise_rows.jsonl",
+                [
+                    {
+                        "index": index,
+                        "premise_id": premise_id,
+                        "task_ids": sorted(grouped_tasks[premise_id]),
+                        "n_trace_rows": len(grouped_embed[premise_id]),
+                        "pooling": "mean_across_trace_variants",
+                    }
+                    for index, premise_id in enumerate(embed_ids)
+                ],
+            )
+        else:
+            embed = np.zeros((1, 1))
+        if eval_mode == "scientific" and (not np.isfinite(hidden).all() or not np.isfinite(embed).all()):
+            raise ValueError("scientific collect refuses non-finite hidden or premise features")
         arrays = {
             "H": hidden,
             "E": embed,
@@ -751,6 +811,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
         extra.append(dest)
     if backend in {"tiny", "frozen"} and (out / "event_rows.jsonl").exists():
         extra.append(out / "event_rows.jsonl")
+    if backend in {"tiny", "frozen"} and (out / "premise_rows.jsonl").exists():
+        extra.append(out / "premise_rows.jsonl")
     if getattr(args, "shard", False):
         for i, row in enumerate(shard_rows):
             shard = out / f"traces-shard-{i:04d}.jsonl"
@@ -803,8 +865,10 @@ def cmd_label(args: argparse.Namespace) -> int:
     labels = build_labels(observations, anc, sham_protocol=sham_protocol)
     for lab in labels:
         lab.run_id = "label"
-        lab.base_group_id = tasks[0].base_group_id if tasks else ""
-        lab.record_id = f"label:{lab.event_id}:{lab.premise_id}"
+        if not lab.base_group_id:
+            lab.base_group_id = tasks[0].base_group_id if tasks else ""
+        label_task = lab.task_id or lab.base_group_id or (tasks[0].task_id if tasks else "")
+        lab.record_id = f"label:{label_task}:{lab.event_id}:{lab.premise_id}"
     dens = event_density_sets(tasks[0], labels, sham_protocol) if tasks else {"null_reason": "no_task"}
     rows = [lab.to_dict() for lab in labels] + [{"densities": dens}]
     _write_stage(out, "labels", rows, in_dir=src, config={"command": "label"})
@@ -814,6 +878,17 @@ def cmd_label(args: argparse.Namespace) -> int:
 def _persisted_splits(*dirs: Path | None) -> list[dict]:
     path = _find_stage_file("splits.jsonl", *dirs)
     return read_jsonl(path) if path else []
+
+
+def _split_member_ids(rows: list[dict], role: str) -> set[str]:
+    """Return task/base IDs assigned to one persisted split role."""
+    return {
+        str(value)
+        for row in rows
+        if row.get("role") == role
+        for value in (row.get("task_id"), row.get("base_group_id"))
+        if value
+    }
 
 
 def cmd_fit(args: argparse.Namespace) -> int:
@@ -830,7 +905,8 @@ def cmd_fit(args: argparse.Namespace) -> int:
         raise FileNotFoundError("fit requires features.npz from collect")
     persisted = _persisted_splits(src, labels_dir)
     if persisted:
-        require_persisted_roles(persisted, args.split, "probe fit", scientific=getattr(args, "eval_mode", "fixture") == "scientific")
+        scientific = getattr(args, "eval_mode", "fixture") == "scientific"
+        require_persisted_roles(persisted, args.split, "probe fit", scientific=scientific, allow_mixed=scientific)
     arrays = read_npz(src / "features.npz")
     h = arrays.get("H", arrays[next(iter(arrays))])
     e = arrays.get("E", h)
@@ -839,6 +915,10 @@ def cmd_fit(args: argparse.Namespace) -> int:
             raise ValueError("scientific fit refuses NaN hidden rows")
         keep = np.isfinite(h).all(axis=1)
         h = h[keep]
+    if getattr(args, "eval_mode", "fixture") == "scientific" and (not np.isfinite(e).all() or e.ndim != 2):
+        raise ValueError("scientific fit refuses non-finite or malformed premise features")
+    if h.ndim != 2 or e.ndim != 2 or h.shape[0] == 0 or e.shape[0] == 0:
+        raise ValueError("fit requires non-empty two-dimensional H and E features")
     y_task = np.full((h.shape[0], e.shape[0]), np.nan)
     y_beh = np.full((h.shape[0], e.shape[0]), np.nan)
     trace_rows = []
@@ -846,25 +926,37 @@ def cmd_fit(args: argparse.Namespace) -> int:
         if cand.exists():
             trace_rows = read_jsonl(cand)
             break
+    if any((row.get("metadata") or {}).get("forced_target") for row in trace_rows):
+        fit_cfg["evidence_status"] = "fixture/tiny_only_forced_target"
+    elif any((row.get("metadata") or {}).get("evidence_status") == "synthetic_target_assignment" for row in trace_rows):
+        fit_cfg["evidence_status"] = "fixture/tiny_only_synthetic_assignment"
     event_keys = []
     if (src / "event_rows.jsonl").exists():
         for row in read_jsonl(src / "event_rows.jsonl"):
-            event_keys.append((row.get("trace_id"), row.get("identity_key") or row.get("event_id") or row.get("node_id"), row.get("node_id"), row.get("record_id")))
+            event_keys.append((row.get("trace_id"), row.get("identity_key") or row.get("event_id") or row.get("node_id"), row.get("node_id"), row.get("record_id"), row.get("task_id") or row.get("base_group_id")))
     else:
         for trow in trace_rows:
             for ev in trow.get("events") or []:
                 ident = ev.get("identity") or {}
                 key = json.dumps(ident, sort_keys=True, ensure_ascii=False) if ident else ev.get("node_id")
-                event_keys.append((trow.get("id"), key, ev.get("node_id"), ev.get("record_id")))
+                event_keys.append((trow.get("id"), key, ev.get("node_id"), ev.get("record_id"), trow.get("task_id") or trow.get("base_group_id")))
+    task_for_e = None
     if (labels_dir / "labels.jsonl").exists():
         labels = [row for row in read_jsonl(labels_dir / "labels.jsonl") if "behavior_label" in row or "task_label" in row]
-        task_for_e = None
+        if persisted and getattr(args, "eval_mode", "fixture") == "scientific":
+            allowed_ids = _split_member_ids(persisted, args.split)
+            if allowed_ids:
+                labels = [row for row in labels if not (row.get("task_id") or row.get("base_group_id")) or str(row.get("task_id") or row.get("base_group_id")) in allowed_ids]
         task_path = _find_tasks_jsonl(src, labels_dir)
         if task_path:
             task_for_e = Task.from_dict(read_jsonl(task_path)[0])
         elif labels:
             raise ValueError("fit requires tasks.jsonl so E columns follow task.premises, not label order")
-        unique = _e_premise_ids(task_for_e, labels)
+        premise_rows_path = src / "premise_rows.jsonl"
+        if premise_rows_path.exists():
+            unique = [row.get("premise_id") for row in read_jsonl(premise_rows_path) if row.get("premise_id")]
+        else:
+            unique = _e_premise_ids(task_for_e, labels)
         for row in labels:
             if row.get("premise_id") not in unique:
                 continue
@@ -873,10 +965,15 @@ def cmd_fit(args: argparse.Namespace) -> int:
                 continue
             matched = []
             eid = row.get("event_id")
-            for i, (_tid, ent, nid, rid) in enumerate(event_keys):
+            for i, (_tid, ent, nid, rid, event_task_id) in enumerate(event_keys):
                 if i >= h.shape[0]:
                     break
-                if eid and eid in {ent, nid, rid}:
+                label_task_id = row.get("task_id")
+                if eid and eid in {ent, nid, rid} and (
+                    not label_task_id
+                    or label_task_id == _tid
+                    or label_task_id == event_task_id
+                ):
                     matched.append(i)
             if not matched:
                 continue
@@ -906,7 +1003,14 @@ def cmd_fit(args: argparse.Namespace) -> int:
     prefixes = [str(row.get("premise_id") or "") for row in label_rows]
     y_text = np.array([row.get("task_label") if row.get("task_label") in {0, 1, 0.0, 1.0} else np.nan for row in label_rows], dtype=float)
     if np.isfinite(y_text).any():
-        text_fit = fit_text_predictor([prefix] * len(prefixes) if prefix else prefixes, y_text, premises=prefixes)
+        premise_text = {
+            p.premise_id: p.text
+            for p in (task_for_e.premises if task_for_e is not None else [])
+            if getattr(p, "premise_id", None)
+        }
+        visible_prefixes = [prefix] * len(prefixes) if prefix else [""] * len(prefixes)
+        visible_premises = [premise_text.get(pid, "") for pid in prefixes]
+        text_fit = fit_text_predictor(visible_prefixes, y_text, premises=visible_premises)
         rows.append({"baseline": "text_predictor", **{k: (v.tolist() if hasattr(v, "tolist") else v) for k, v in text_fit.items()}})
         rows.append({"baseline": "verbalizer", "tier": "supervised", "status": "trained", "visibility": "prospective", "target": "dependency_set"})
     elif scientific:
@@ -921,10 +1025,17 @@ def cmd_fit(args: argparse.Namespace) -> int:
         rows.append({"baseline": "attention_mean", "score": attention_mean(attn, list(range(min(1, attn.shape[-1]))))})
         layer = attn if attn.ndim == 2 else attn[0]
         rows.append({"baseline": "attention_rollout", "shape": list(attention_rollout([layer]).shape)})
-        try:
-            rows.append({"baseline": "attention_threshold", **fit_attention_threshold(attn.reshape(-1)[:2], np.array([0.0, 1.0]), split="dev")})
-        except ValueError as exc:
-            rows.append({"baseline": "attention_threshold", "status": str(exc)})
+        attention_labels = arrays.get("attention_labels")
+        if attention_labels is None:
+            rows.append({"baseline": "attention_threshold", "status": "refused_not_section8", "reason": "no persisted dev labels"})
+        else:
+            attention_labels = np.asarray(attention_labels, dtype=float).reshape(-1)
+            scores = attn.reshape(-1)
+            n = min(scores.size, attention_labels.size)
+            try:
+                rows.append({"baseline": "attention_threshold", **fit_attention_threshold(scores[:n], attention_labels[:n], split="dev")})
+            except ValueError as exc:
+                rows.append({"baseline": "attention_threshold", "status": str(exc)})
     if not scientific:
         for tier in ("zeroshot", "fiveshot", "reflection", "supervised"):
             gen = (lambda p, t=prefix: t) if prefix else None
@@ -933,27 +1044,35 @@ def cmd_fit(args: argparse.Namespace) -> int:
             except ValueError as exc:
                 rows.append({"baseline": "verbalizer", "tier": tier, "status": str(exc)})
     if h.size:
-        mlp = BoundaryMLP(h.shape[1])
-        pre = arrays.get("H_pre_step", h)
-        post = arrays.get("H_post_step")
-        if post is not None and np.asarray(post).size:
-            x_b = np.vstack([np.asarray(pre), np.asarray(post)])
-            y_b = np.concatenate([np.ones(len(pre)), np.zeros(len(post))])
-            note = "pre_step_pos_post_step_neg"
+        boundary_labels = arrays.get("boundary_labels")
+        if boundary_labels is None:
+            rows.append(
+                {
+                    "baseline": "boundary_mlp",
+                    "status": "refused_missing_boundary_labels",
+                    "reason": "position names are not supervision",
+                }
+            )
         else:
-            x_b, y_b, note = h, np.ones(h.shape[0]), "event-rows-only_no_negatives"
-        fitted = mlp.fit(x_b, y_b, steps=5)
-        rows.append(
-            {
-                "baseline": "boundary_mlp",
-                **fitted,
-                "note": note,
-                "W1": mlp.W1.tolist(),
-                "b1": mlp.b1.tolist(),
-                "W2": mlp.W2.tolist(),
-                "b2": mlp.b2.tolist(),
-            }
-        )
+            labels = np.asarray(boundary_labels, dtype=float).reshape(-1)
+            n = min(h.shape[0], labels.size)
+            known = np.isfinite(labels[:n]) & np.isin(labels[:n], [0.0, 1.0])
+            if known.sum() < 2 or np.unique(labels[:n][known]).size < 2:
+                rows.append({"baseline": "boundary_mlp", "status": "refused_invalid_boundary_labels"})
+            else:
+                mlp = BoundaryMLP(h.shape[1])
+                fitted = mlp.fit(h[:n][known], labels[:n][known], steps=5)
+                rows.append(
+                    {
+                        "baseline": "boundary_mlp",
+                        **fitted,
+                        "note": "persisted_boundary_labels",
+                        "W1": mlp.W1.tolist(),
+                        "b1": mlp.b1.tolist(),
+                        "W2": mlp.W2.tolist(),
+                        "b2": mlp.b2.tolist(),
+                    }
+                )
     _write_stage(out, "probes", rows, in_dir=src, extra_dir=labels_dir if labels_dir != src else None, config=fit_cfg)
     return 0
 
@@ -994,28 +1113,11 @@ def _find_labels_jsonl(*dirs: Path | None) -> Path | None:
 
 
 def _p2_rows_from_labels(src: Path) -> list[dict]:
-    dens = None
-    acc = None
-    for row in read_jsonl(src / "labels.jsonl"):
-        if "densities" in row:
-            dens = row["densities"]
-    if (src / "traces.jsonl").exists():
-        traces = read_jsonl(src / "traces.jsonl")
-        scored = [t.get("correct") for t in traces if t.get("correct") is not None]
-        acc = float(np.mean(scored)) if scored else None
-    if dens is None:
-        return []
-    return [
-        {
-            "problem_id": (read_jsonl(src / "tasks.jsonl")[0].get("task_id") if (src / "tasks.jsonl").exists() else "task"),
-            "base_rho": dens.get("rho_S_raw"),
-            "noop_rho": dens.get("rho_S_raw"),
-            "base_acc": acc,
-            "noop_acc": acc,
-            "shared_premises": dens.get("S") or [],
-            "shared_denom": dens.get("denominator_S"),
-        }
-    ]
+    # A normal labels directory contains one base/edit experiment, not a
+    # no-op pair.  Reusing its density for both sides creates a fabricated
+    # paired result.  Until an explicit persisted no-op artifact is present,
+    # leave P2 unevaluated; callers can still provide a verified p2_table.jsonl.
+    return []
 
 
 def _p3_rows_from_interventions(src: Path) -> list[dict]:
@@ -1030,8 +1132,12 @@ def _p3_rows_from_interventions(src: Path) -> list[dict]:
                 "main_acc": main.get("task_correct") if main.get("task_correct") is not None else row.get("task_correct"),
                 "crand_acc": crand.get("task_correct"),
                 "clayer_acc": clayer.get("task_correct"),
+                "baseline_acc": (row.get("relative") or {}).get("baseline_task_correct"),
                 "invalid_rate": main.get("invalid") if main.get("invalid") is not None else row.get("invalid"),
                 "nontarget": main.get("nontarget") if main.get("nontarget") is not None else row.get("nontarget"),
+                "status": row.get("status"),
+                "clayer_status": row.get("clayer_status"),
+                "rescue_outcomes": (row.get("relative") or {}).get("rescue_outcomes"),
             }
         )
     return rows
@@ -1082,7 +1188,26 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     labels_dir = Path(args.labels_dir) if getattr(args, "labels_dir", None) else src
     persisted = _persisted_splits(src, feat_dir, labels_dir)
     if persisted:
-        require_persisted_roles(persisted, args.split, "calibration", scientific=getattr(args, "eval_mode", "fixture") == "scientific")
+        scientific = getattr(args, "eval_mode", "fixture") == "scientific"
+        if scientific and args.split not in {row.get("role") for row in persisted}:
+            _write_stage(
+                out,
+                "calibration",
+                [{
+                    "scores": None,
+                    "alpha": alpha,
+                    "q": None,
+                    "status": "insufficient_calibration_split",
+                    "unit": "problem",
+                    "n_calibration_units": 0,
+                    "reason": f"no persisted {args.split} rows",
+                }],
+                in_dir=src,
+                extra_dir=feat_dir if feat_dir != src else None,
+                config=cal_cfg,
+            )
+            return 0
+        require_persisted_roles(persisted, args.split, "calibration", scientific=scientific, allow_mixed=scientific)
     outputs = []
     status = "probe_weights_or_features_missing"
     if src and (src / "probes.jsonl").exists() and feat_dir and (feat_dir / "features.npz").exists():
@@ -1093,21 +1218,38 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
         lab_path = _find_labels_jsonl(labels_dir, src, feat_dir)
         if lab_path:
             labs = [r for r in read_jsonl(lab_path) if "premise_id" in r]
+            if persisted and getattr(args, "eval_mode", "fixture") == "scientific":
+                allowed_ids = _split_member_ids(persisted, args.split)
+                if allowed_ids:
+                    labs = [r for r in labs if not (r.get("task_id") or r.get("base_group_id")) or str(r.get("task_id") or r.get("base_group_id")) in allowed_ids]
         traces = read_jsonl(feat_dir / "traces.jsonl") if (feat_dir / "traces.jsonl").exists() else []
+        # Keep the full event row.  Calibration units must be keyed by the
+        # trace/task that produced each hidden row; collapsing all rows onto
+        # traces[0] makes the first trace dominate multi-trace calibration.
         event_nodes = []
         if (feat_dir / "event_rows.jsonl").exists():
-            event_nodes = [r.get("identity_key") or r.get("event_id") or r.get("node_id") for r in read_jsonl(feat_dir / "event_rows.jsonl")]
+            event_nodes = read_jsonl(feat_dir / "event_rows.jsonl")
         else:
             for trow in traces:
                 for ev in trow.get("events") or []:
                     ident = ev.get("identity") or {}
-                    event_nodes.append(ident.get("key") or ev.get("node_id") or ident.get("entity_or_expression"))
+                    event_nodes.append(
+                        {
+                            "event_id": json.dumps(ident, sort_keys=True, ensure_ascii=False) if ident else ev.get("node_id"),
+                            "node_id": ev.get("node_id") or ident.get("entity_or_expression"),
+                            "task_id": trow.get("task_id") or trow.get("base_group_id"),
+                        }
+                    )
         task_path = _find_tasks_jsonl(src, feat_dir, labels_dir)
         if task_path is None and labs:
             raise ValueError("calibrate requires tasks.jsonl so E columns follow task.premises, not label order")
         task_for_e = Task.from_dict(read_jsonl(task_path)[0]) if task_path else None
         task_anc = ancestors(task_for_e) if task_for_e and task_for_e.nodes else {}
-        unique = _e_premise_ids(task_for_e, labs)
+        premise_rows_path = feat_dir / "premise_rows.jsonl"
+        if premise_rows_path.exists():
+            unique = [row.get("premise_id") for row in read_jsonl(premise_rows_path) if row.get("premise_id")]
+        else:
+            unique = _e_premise_ids(task_for_e, labs)
         arrays = read_npz(feat_dir / "features.npz")
         for row in probe_rows:
             probe = BilinearProbe.from_row(row)
@@ -1115,7 +1257,10 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
             head = row.get("head") or probe.head_type or "task"
             units: dict[str, list[float]] = {}
             for i in range(pred.shape[0]):
-                nid = event_nodes[i] if i < len(event_nodes) else None
+                event_row = event_nodes[i] if i < len(event_nodes) else {}
+                event_id = event_row.get("identity_key") or event_row.get("event_id") or event_row.get("node_id")
+                node_id = event_row.get("node_id") or event_id
+                trace_task_id = event_row.get("task_id") or event_row.get("base_group_id") or "task"
                 label_key = "task_label" if head == "task" else "behavior_label"
                 truth_i = []
                 known_i = False
@@ -1123,23 +1268,23 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
                     hits = [
                         r
                         for r in labs
-                        if r.get("premise_id") == pid and (r.get("event_id") in {nid, None} or nid in str(r.get("event_id") or ""))
+                        if r.get("premise_id") == pid
+                        and (r.get("event_id") in {event_id, node_id, None} or event_id in str(r.get("event_id") or ""))
+                        and (not r.get("task_id") or r.get("task_id") == trace_task_id)
                     ]
                     if not hits:
                         continue
                     if any(r.get(label_key) in {0, 1, 0.0, 1.0} for r in hits):
                         known_i = True
                     if any(r.get(label_key) == 1 for r in hits):
-                        if head == "task" and pid not in set(task_anc.get(nid, set())) | ({nid} if nid else set()):
+                        if head == "task" and pid not in set(task_anc.get(node_id, set())) | ({node_id} if node_id else set()):
                             continue
                         truth_i.append(j)
                 if not known_i:
                     continue
                 empty_i = not truth_i
                 val = sequence_score(pred[i].tolist(), True, empty_i, nonconformity="one_minus_p", truth_indices=None if empty_i else [j for j in truth_i if j < pred.shape[1]])
-                key = traces[0]["task_id"] if traces else "task"
-                if i < len(event_nodes) and traces:
-                    key = next((t.get("task_id") or "task" for t in traces for ev in (t.get("events") or [{}]) if True), key)
+                key = trace_task_id
                 units.setdefault(key, []).append(0.0 if val is None else val)
             scores = [max(vals) for vals in units.values()] if units else None
             if scores is None:
@@ -1260,8 +1405,7 @@ def cmd_intervene(args: argparse.Namespace) -> int:
                 basis = q[:, :rank]
                 direction_status = "probe_direction"
             elif getattr(args, "eval_mode", "fixture") == "scientific":
-                basis = orthonormal_basis(base.shape[-1], rank, rng)
-                direction_status = "direction_fit_missing"
+                raise ValueError("scientific intervene requires a fitted probe direction; random basis is not evidence")
             else:
                 basis = orthonormal_basis(base.shape[-1], rank, rng)
                 direction_status = "random_direction_unfitted"
@@ -1285,9 +1429,23 @@ def cmd_intervene(args: argparse.Namespace) -> int:
             labels_path = src / "labels.jsonl"
             if labels_path.exists() and matrix.shape[0] >= 2:
                 lab_rows = [r for r in read_jsonl(labels_path) if r.get("behavior_label") in {0, 1, 0.0, 1.0}]
-                y_inlp = np.array([float(r["behavior_label"]) for r in lab_rows[: matrix.shape[0]]], dtype=float)
-                if y_inlp.size == matrix.shape[0] and len(np.unique(y_inlp)) > 1:
-                    proj = inlp_remove(matrix[: y_inlp.size], y_inlp)
+                y_inlp = np.full(matrix.shape[0], np.nan, dtype=float)
+                for idx, event_row in enumerate(event_rows[: matrix.shape[0]]):
+                    event_id = event_row.get("identity_key") or event_row.get("event_id") or event_row.get("node_id")
+                    node_id = event_row.get("node_id")
+                    task_id = event_row.get("task_id") or event_row.get("base_group_id")
+                    hits = [
+                        row
+                        for row in lab_rows
+                        if row.get("event_id") in {event_id, node_id}
+                        and (not row.get("task_id") or row.get("task_id") == task_id)
+                    ]
+                    values = {float(row["behavior_label"]) for row in hits}
+                    if len(values) == 1:
+                        y_inlp[idx] = values.pop()
+                labeled = np.isfinite(y_inlp)
+                if labeled.sum() >= 2 and len(np.unique(y_inlp[labeled])) > 1:
+                    proj = inlp_remove(matrix[labeled], y_inlp[labeled])
                     inlp_status = "labeled_behavior"
                 else:
                     proj = inlp_remove(np.vstack([base, donor]), np.array([0.0, 1.0]))
@@ -1304,6 +1462,14 @@ def cmd_intervene(args: argparse.Namespace) -> int:
                 "donor_kind": donor_kind,
                 "direction_status": direction_status,
                 "inlp_status": inlp_status,
+                "direction_hash": hashlib.sha256(np.ascontiguousarray(basis).tobytes()).hexdigest(),
+                "direction_rank": int(basis.shape[1]),
+                "direction_norm": float(np.linalg.norm(basis)),
+                "donor_event_key": (
+                    event_rows[i_donor].get("identity_key")
+                    if event_rows and i_donor < len(event_rows)
+                    else None
+                ),
             }
             backend = getattr(args, "backend", "tiny")
             if backend in {"tiny", "frozen"}:
@@ -1364,12 +1530,14 @@ def cmd_intervene(args: argparse.Namespace) -> int:
                     hook_meta["revision"] = packed_runtime["card"].get("revision")
                 hook_meta["prefix_truncated"] = False
                 hook_meta["prefix_n"] = len(ids)
+                hook_meta["hook_token_position"] = max(len(ids) - 1, 0)
                 hook_meta["model_kind"] = model_kind
                 hook_meta["weight_seed"] = weight_seed
                 if packed_runtime is not None:
                     main_layer = int(collect_cfg.get("hidden_layer") or readout_layer_index(packed_runtime["card"]["layers"]))
                 else:
                     main_layer = int(collect_cfg.get("hidden_layer") or readout_layer_index(3))
+                hook_meta["hook_layer"] = main_layer
                 aligned = ev is not None
                 decode_kw = {
                     "weight_seed": weight_seed,
@@ -1378,7 +1546,16 @@ def cmd_intervene(args: argparse.Namespace) -> int:
                     "model": runtime_model,
                     "max_new": _resolved_max_new(args, 4, 32),
                 }
-                hooked = intervene_hidden_decode(model_kind, ids, main_layer, donor=donor, basis_seed=basis_seed, mode="pi_z_swap", **decode_kw)
+                hooked = intervene_hidden_decode(
+                    model_kind,
+                    ids,
+                    main_layer,
+                    donor=donor,
+                    basis_seed=basis_seed,
+                    basis=basis,
+                    mode="pi_z_swap",
+                    **decode_kw,
+                )
                 hook_meta.update({"hook_once": hooked["hook"], "transform": hooked["transform"], "hook_timing": hooked.get("timing"), "token_changed": hooked["followed_donor"]})
 
                 def _decode_text(decoded) -> str:
@@ -1428,6 +1605,7 @@ def cmd_intervene(args: argparse.Namespace) -> int:
                 g_base = 1.0 if donor_src is not None and base_ans == donor_src else 0.0
                 hook_meta["ie_z"] = g_int - g_base
                 hook_meta["ie_z_g"] = "target_follow"
+                hook_meta["baseline_task_correct"] = None if gold is None or base_ans is None else float(base_ans == gold)
                 crand_hooked = intervene_hidden_decode(model_kind, ids, main_layer, mode="add_delta", delta=cr["delta"], **decode_kw)
                 crand_out = _outcomes(crand_hooked)
                 hook_meta["crand_transform"] = crand_hooked["transform"]

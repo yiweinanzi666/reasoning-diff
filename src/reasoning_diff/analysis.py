@@ -248,7 +248,10 @@ def p3_from_rows(rows: list[dict]) -> dict:
     return {
         "n": len(rows),
         "vs_crand": float(np.mean(crand)) if crand else None,
+        "p3_vs_crand": float(np.mean(crand)) if crand else None,
         "vs_clayer": float(np.mean(clayer)) if clayer else None,
+        "n_vs_crand": len(crand),
+        "n_vs_clayer": len(clayer),
         "invalid_rate": None
         if any(item.get("invalid_rate") is None for item in items)
         else float(np.mean([item["invalid_rate"] for item in items])),
@@ -284,7 +287,7 @@ def _bootstrap_p1(length, op, rho, y, held_out, precomputed, groups, rng, n: int
 
 def week8_decision(measurements: dict, gate_thresholds: dict | None = None) -> dict:
     gates = {}
-    metric_key = {"gate0": "rho_S_excess", "gate1": "delta_auc", "gate2": "p3_vs_crand"}
+    metric_key = {"gate0": "rho_S_excess", "gate1": "delta_auc", "gate2": "vs_crand"}
     for name in ("gate0", "gate1", "gate2"):
         thr = None if not gate_thresholds else gate_thresholds.get(name)
         metric = measurements.get(name) if measurements.get(name) is not None else measurements.get(metric_key[name])

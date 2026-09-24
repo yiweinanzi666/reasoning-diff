@@ -38,8 +38,25 @@ def digest(obj) -> str:
 
 
 def file_digest(path: str | Path) -> str:
+    """Return a stable SHA-256 for a file or a directory tree.
+
+    Directory inputs occur for official dataset snapshots.  Hashing only the
+    bytes of a single path raises ``IsADirectoryError`` and leaves provenance
+    checks unusable; include sorted relative names and file bytes instead.
+    """
+    path = Path(path)
+    if path.is_dir():
+        h = hashlib.sha256()
+        for child in sorted((p for p in path.rglob("*") if p.is_file()), key=lambda p: p.relative_to(path).as_posix()):
+            rel = child.relative_to(path).as_posix().encode("utf-8")
+            h.update(len(rel).to_bytes(8, "big"))
+            h.update(rel)
+            with child.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    h.update(chunk)
+        return h.hexdigest()
     h = hashlib.sha256()
-    with Path(path).open("rb") as handle:
+    with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()

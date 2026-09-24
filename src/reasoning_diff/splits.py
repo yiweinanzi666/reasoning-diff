@@ -178,13 +178,21 @@ def require_split(split: str, allowed: tuple[str, ...], operation: str) -> None:
         raise ValueError(f"{operation} cannot fit on {split}; expected {allowed}")
 
 
-def require_persisted_roles(rows: list[dict], expected: str, operation: str, scientific: bool = False) -> None:
+def require_persisted_roles(
+    rows: list[dict],
+    expected: str,
+    operation: str,
+    scientific: bool = False,
+    allow_mixed: bool = False,
+) -> None:
     if not rows:
         raise ValueError(f"{operation} requires persisted splits.jsonl roles")
     roles = {row.get("role") for row in rows}
     if "test" in roles and expected != "test":
         raise ValueError(f"{operation} refuses test-family artifacts {sorted(roles)}")
-    if scientific and roles != {expected}:
+    if scientific and expected not in roles:
+        raise ValueError(f"{operation} requires persisted {expected} rows; found {sorted(roles)}")
+    if scientific and not allow_mixed and roles != {expected}:
         raise ValueError(f"{operation} persisted roles {sorted(roles)} do not match {expected}")
 
 

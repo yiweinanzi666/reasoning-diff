@@ -18,10 +18,20 @@ def direct_transfer(source_dim: int, target_dim: int) -> dict:
 
 def fit_linear_map(src: np.ndarray, tgt: np.ndarray, split: str, labeled: bool, labels: np.ndarray | None = None) -> dict:
     require_split(split, ("transfer_pairs",), "transfer mapping")
+    src = np.asarray(src, dtype=float)
+    tgt = np.asarray(tgt, dtype=float)
+    if src.ndim != 2 or tgt.ndim != 2 or not np.isfinite(src).all() or not np.isfinite(tgt).all():
+        raise ValueError("transfer mapping requires finite two-dimensional arrays")
     if src.shape[0] != tgt.shape[0]:
         raise ValueError("paired rows required")
     if labeled and labels is None:
         raise ValueError("supervised adapt requires a label tensor")
+    if labeled:
+        labels = np.asarray(labels).reshape(-1)
+        if labels.shape[0] != src.shape[0] or not np.isfinite(labels).all():
+            raise ValueError("supervised adapt labels must match paired rows and be finite")
+        if np.unique(labels).size < 2:
+            raise ValueError("supervised adapt requires at least two label classes")
     t_mean = tgt.mean(axis=0)
     s_mean = src.mean(axis=0)
     a = tgt - t_mean

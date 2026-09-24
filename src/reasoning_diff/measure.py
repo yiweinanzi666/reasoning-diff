@@ -48,11 +48,19 @@ def build_labels(
     task_ancestors: dict[str, set[str]],
     sham_protocol: dict | None = None,
 ) -> list[Label]:
+    # Materialize once: callers may pass a generator.  Re-iterating a
+    # generator silently drops sham observations and changes noise labels.
+    observations = list(observations)
     rows = []
-    grouped: dict[tuple[str, str], list[Observation]] = {}
+    grouped: dict[tuple[str, str, str], list[Observation]] = {}
     for obs in observations:
-        grouped.setdefault((_event_key(obs), obs.premise_id), []).append(obs)
-    for (event_id, premise_id), items in grouped.items():
+        # New traces carry an explicit task/base key.  Legacy fixtures often
+        # do not; keep their historical event/premise grouping for backwards
+        # compatibility instead of using reference_trace as an implicit task
+        # identity (which splits real/sham rows that belong together).
+        task_key = obs.task_id or obs.base_group_id or ""
+        grouped.setdefault((task_key, _event_key(obs), obs.premise_id), []).append(obs)
+    for (task_key, event_id, premise_id), items in grouped.items():
         node_id = next((item.node_id for item in items if item.node_id), None)
         graph_id = _label_node_id(event_id, node_id, task_ancestors)
         known_task = graph_id in task_ancestors
@@ -83,14 +91,27 @@ def build_labels(
                 protocol_ref=None if sham_protocol is None else sham_protocol.get("name"),
                 evidence_ids=[i.observation_id for i in real],
                 opportunities=len(positives) + len(known_negatives),
+                task_id=items[0].task_id,
+                base_group_id=items[0].base_group_id,
             )
         )
-    sham_by_event: dict[str, list[Observation]] = {}
+    sham_by_event: dict[tuple[str, str], list[Observation]] = {}
     for obs in observations:
         if _is_sham(obs):
-            sham_by_event.setdefault(_event_key(obs), []).append(obs)
+            task_key = obs.task_id or obs.base_group_id or ""
+            sham_by_event.setdefault((task_key, _event_key(obs)), []).append(obs)
     for row in rows:
-        shams = sham_by_event.get(row.event_id, [])
+        task_key = row.task_id or row.base_group_id
+        shams = sham_by_event.get((task_key, row.event_id), [])
+        if not shams and not task_key:
+            # Legacy observations have no task key.  Match their sham by
+            # event, while keyed observations remain isolated per task.
+            shams = [
+                item
+                for (sham_task, sham_event), items in sham_by_event.items()
+                if sham_event == row.event_id
+                for item in items
+            ]
         if sham_protocol is None or not shams:
             row.noise_ref = None
         elif str(row.premise_id).startswith("sham:"):

@@ -263,3 +263,22 @@ def extract_answer(text: str, answer_kind: str) -> str | None:
         return canonical_value(stripped) if stripped else None
     numbers = re.findall(NUMBER, text)
     return canonical_value(numbers[-1]) if numbers else None
+
+
+def normalize_answer(value: str | None, answer_kind: str) -> str | None:
+    """Normalize a predicted or gold answer with the same task-kind rules."""
+    if value is None:
+        return None
+    normalized = canonical_value(value)
+    if answer_kind == "code":
+        return normalized.strip()
+    if answer_kind in {"span", "text", "short"}:
+        normalized = re.sub(r"[^\w\s]", " ", normalized, flags=re.UNICODE)
+        normalized = " ".join(normalized.casefold().split())
+    return normalized
+
+
+def answers_equal(predicted: str | None, gold: str | None, answer_kind: str) -> bool | None:
+    pred = normalize_answer(predicted, answer_kind)
+    target = normalize_answer(gold, answer_kind)
+    return None if pred is None or target is None else pred == target

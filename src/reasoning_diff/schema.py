@@ -253,6 +253,7 @@ class Observation:
     run_id: str = ""
     base_group_id: str = ""
     status: str = "ok"
+    task_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.record_id:
@@ -281,6 +282,7 @@ class Label:
     run_id: str = ""
     base_group_id: str = ""
     status: str = "ok"
+    task_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.record_id:

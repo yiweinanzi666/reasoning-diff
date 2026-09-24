@@ -47,6 +47,7 @@ def collect_hidden_trace(
     model=None,
     weight_source: str = "random_init",
     hidden_layer: int | None = None,
+    prompt_text: str | None = None,
 ) -> dict:
     if model is None:
         torch.manual_seed(weight_seed)
@@ -91,9 +92,28 @@ def collect_hidden_trace(
         pre_step = h_matrix
         pre_value = h_matrix
         post_step = h_matrix
+    def resolved_span(premise, cursor: int) -> tuple[int, int, int]:
+        """Resolve local sentence/paragraph spans in the rendered prompt."""
+        if prompt_text and getattr(premise, "kind", None) in {"sentence", "paragraph"}:
+            prefix = f"{premise.document_id}: " if getattr(premise, "document_id", None) else ""
+            needle = prefix + premise.text
+            loc = prompt_text.find(needle, cursor)
+            if loc >= 0:
+                start = loc + len(prefix)
+                return start, start + len(premise.text), start + len(premise.text)
+            loc = prompt_text.find(premise.text, cursor)
+            if loc >= 0:
+                return loc, loc + len(premise.text), loc + len(premise.text)
+        return premise.start, premise.end, cursor
+
     e_rows = []
+    premise_spans = []
+    search_cursor = 0
     for premise in premises:
-        idxs = [i for i in span_token_indices(offsets, premise.start, premise.end) if i < hidden.shape[0]]
+        span_start, span_end, next_cursor = resolved_span(premise, search_cursor)
+        premise_spans.append([span_start, span_end])
+        search_cursor = max(search_cursor, next_cursor)
+        idxs = [i for i in span_token_indices(offsets, span_start, span_end) if i < hidden.shape[0]]
         if idxs:
             e_rows.append(hidden[idxs].mean(axis=0))
         else:
@@ -113,6 +133,7 @@ def collect_hidden_trace(
         "h_position": h_position,
         "event_ids": event_ids,
         "identity_keys": identity_keys,
+        "premise_spans": premise_spans,
     }
 
 
@@ -190,6 +211,7 @@ def intervene_hidden_decode(
     top_p: float = 1.0,
     event_aligned: bool = False,
     basis_seed: int | None = None,
+    basis: np.ndarray | None = None,
     mode: str = "pi_z_swap",
     projector: np.ndarray | None = None,
     delta: np.ndarray | None = None,
@@ -200,11 +222,17 @@ def intervene_hidden_decode(
         model = build_tiny(kind)
     donor_vec = np.asarray(donor, dtype=float) if donor is not None else None
     rng = np.random.default_rng(1 if basis_seed is None else int(basis_seed))
-    basis = None
+    fitted_basis = None if basis is None else np.asarray(basis, dtype=float)
     if mode == "pi_z_swap":
         if donor_vec is None:
             raise ValueError("pi_z_swap requires donor")
-        basis = orthonormal_basis(donor_vec.shape[-1], min(2, donor_vec.shape[-1]), rng)
+        if fitted_basis is None:
+            fitted_basis = orthonormal_basis(donor_vec.shape[-1], min(2, donor_vec.shape[-1]), rng)
+        if fitted_basis.ndim != 2 or fitted_basis.shape[0] != donor_vec.shape[-1]:
+            raise ValueError("basis must have shape (hidden_dim, rank)")
+        if fitted_basis.shape[1] < 1 or fitted_basis.shape[1] > fitted_basis.shape[0]:
+            raise ValueError("basis rank must be between 1 and hidden_dim")
+        basis = fitted_basis
 
         def transform(t):
             vec = t.detach().cpu().numpy().reshape(-1)
