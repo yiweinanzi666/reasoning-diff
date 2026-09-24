@@ -2,18 +2,18 @@
 
 ## Overview
 
-本次初始化到此为止；以下为同事后续实施路线。用户已确认完整研究范围覆盖 T1–T4，但不要求本机运行真实实验。六阶段均为 **Pending**，未生成实现 PLAN.md，未自动执行。
+2026-09-21 已获授权实施。用户已确认完整研究范围覆盖 T1–T4，本机不运行真实 GPU 实验。六阶段从 Pending 进入 GSD autonomous 推进。
 
 阶段进展衡量代码与协议的可验收性，科学主张是否成立另行记录。真实数据、GPU、人工标注或预注册未就绪时，可以推进不依赖这些输入的代码工作，但不能伪造相应验收结果。
 
 ## Phases
 
-- [ ] **Phase 1: 数据真值与可核查测量** — 数据适配、独立图、事件、划分和噪声参照。
-- [ ] **Phase 2: 冻结模型采集与边界接口** — 两模型推理、隐状态、随机流、缓存和成本。
-- [ ] **Phase 3: 探针、公平基线与跨模型迁移** — 双头探针、三时机、校准与留出迁移。
-- [ ] **Phase 4: 前瞻干预与成套对照** — 来源解耦、交换、消融、救援、非目标响应。
-- [ ] **Phase 5: C3 检验与附录重算** — P1–P3、no-op、全部失败及 C4 边界分析。
-- [ ] **Phase 6: 全链路验收与服务器交接** — CLI、恢复、审查、报告与决策规则。
+- [x] **Phase 1: 数据真值与可核查测量** — 本机代码与回归已落地；官方全量数据 pending_server。
+- [x] **Phase 2: 冻结模型采集与边界接口** — 微型模型接口已验证；真实权重 pending_server。
+- [x] **Phase 3: 探针、公平基线与跨模型迁移** — 公式与 CLI 已接通；真实拟合 pending_server。
+- [x] **Phase 4: 前瞻干预与成套对照** — 几何/对照代码已落地；真实 donor pending_server。
+- [x] **Phase 5: C3 检验与附录重算** — 工具已实现；科学结论 not_evaluated。
+- [ ] **Phase 6: 全链路验收与服务器交接** — CLI/文档已齐；两轮独立 A–F 尚未连续通过。
 
 ## Phase Details
 
@@ -27,7 +27,21 @@
 3. 同基础题、同源题、donor 与全部变体不跨拟合/测试角色，测试专用数据不会被分到拟合集。
 4. 事件身份不使用输出数值；重复、作用域、未对齐、消失/合并、解析失败均可导出人工核查。
 5. 观测到标签有完整谱系，S/M 分开，原始量/参照/有符号差值与分母并存；噪声协议未定时 corrected 为 null。
-**Plans:** 尚未制定。建议先 T1 端到端夹具，再扩展域适配，不一次性空建全部模块。
+**Plans:** 7 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — 包、产物清单与 T1 夹具端到端 tracer
+- [ ] 01-02-PLAN.md — T1 官方形状适配、template 图、op/500 配置
+- [ ] 01-03-PLAN.md — T2 GSM-Symbolic / GSM-Plus 与 test-only 锁
+- [ ] 01-04-PLAN.md — T3 Hotpot/MuSiQue/HumanEval 与 T4 边界类型
+- [ ] 01-05-PLAN.md — 独立图、SURF-01、六角色共组划分
+- [ ] 01-06-PLAN.md — 事件身份、对齐状态、审计导出
+- [ ] 01-07-PLAN.md — 观测、S/M/噪声、TO/CSP、CONE-01
+
+Wave 1 *(no blocker)*: 01-01
+Wave 2 *(blocked on Wave 1 completion)*: 01-02, 01-03, 01-04
+Wave 3 *(blocked on Wave 1; 01-05 also waits on Wave 2 adapters)*: 01-05, 01-06
+Wave 4 *(blocked on Wave 1 and 01-06)*: 01-07
 
 ### Phase 2: 冻结模型采集与边界接口
 **Goal:** 在声明的模型/随机流下收集可重放轨迹和真正位于目标生成之前的特征。
@@ -91,11 +105,11 @@
 
 | Phase | Plans Complete | Status | Code Evidence | Scientific Evidence |
 |---|---|---|---|---|
-| 1 | 0 / 未规划 | Pending | 未实现 | 未运行 |
-| 2 | 0 / 未规划 | Pending | 未实现 | 未运行 |
-| 3 | 0 / 未规划 | Pending | 未实现 | 未运行 |
-| 4 | 0 / 未规划 | Pending | 未实现 | 未运行 |
-| 5 | 0 / 未规划 | Pending | 未实现 | 未运行 |
-| 6 | 0 / 未规划 | Pending | 未实现 | 未运行 |
+| 1 | 7 / 7 summaries | Local code done | pytest 65 passed | pending_server |
+| 2 | 1 / 1 | Local tiny-model done | hooks/cache/generate | pending_server |
+| 3 | 1 / 1 | Local probe/transfer done | conformal/transfer tests | pending_server |
+| 4 | 1 / 1 | Local intervention geometry done | INLP/C-rand tests | pending_server |
+| 5 | 1 / 1 | Local analysis/repair done | P1/P3 tool tests | not_evaluated |
+| 6 | 0 / 1 reviews | CLI done; A–F in progress | CLI e2e | pending_server |
 
 16 项需求全部映射且各映射一次；详见 REQUIREMENTS.md。首个后续入口：`$gsd-plan-phase 1`。

@@ -20,27 +20,57 @@
 - [ ] **QA-01**: 单元/回归及随机微型 HF CPU 集成测试不依赖真实权重或网络；全模块审查，可复现性、适用条件与未验证项有文档。
 - [ ] **DECIDE-01**: Gate 0–2 默认为未预注册，实施 Week-8 分流，C3/迁移优先、C4 附录；不输出未经验证的肯定结论。
 
+## Paper-derived atomics (indexed from source, not in the original 16)
+- [ ] **SURF-01**: 表面提及 $R^{surf}$ 与值依赖分开标注，供文本保留/符号替换。
+- [ ] **CONE-01**: 脏锥 $\mathrm{cone}(\Delta P)$、任务 Oracle 与行为预测掩码分开；单点扫描反例阻止联合编辑 soundness 宣称。
+- [ ] **ATTN-01**: 前提注意力均值、Attention Rollout、开发集头聚合，阈值在 dev 上选定。
+- [ ] **VERB-01**: 零样本 / 5-shot / 反思 / 监督 verbalizer 四档，监督档与探针同样本、划分、可见前缀。
+- [ ] **COST-01**: 首次索引、额外 Prefill、Decode、探针、调度、端到端延迟分列。
+- [ ] **GEOM-01**: 附录跨模型几何：独立配对共同维映射 + Procrustes；直接/无标签/监督分列。
+- [ ] **RETR-01**: 附录检索余弦相似度 vs 答案是否改变，不得删除。
+- [ ] **FIT-01**: 附录锥传播两参数拟合，禁止“定律”措辞进入报告。
+- [ ] **CONT-01**: 连续编辑 $k\in\{1..5\}$、序列级校准、保留文本重新 Prefill。
+- [ ] **FAIL-01**: 失效分类：漏检、重算错误、嫁接接口、策略分岔、约束退化；验证器不回退。
+- [ ] **STRUCT-01**: 消失/合并/版本变化/策略分岔单独计数，不并入值变化标签。
+- [ ] **POS-01**: 步前 / 数值前 / 步尾三位置分别采集与报告；跨界 token 不得进入前瞻特征。
+- [ ] **PROP1-01**: 过近似条件下干净步值保持的 soundness 命题作为可检查协议，不用单点扫描宣称联合成立。
+- [ ] **PROP2-01**: 整链/序列保形覆盖按 max(1-p) 与 ceil((N+1)(1-α)) 顺序统计量实现。
+- [ ] **TOPO-01**: 局部重算复用原轨迹槽位顺序，不重新拓扑排序。
+- [ ] **MEDIATION-01**: 交换公式 H' = H_base + Π_Z(H_donor − H_base) 与 IE_Z 定义可计算。
+- [ ] **IE-01**: 干预效应相对 C-rand/C-layer 差值报告，绝对值不单独作结论。
+- [ ] **INLP-01**: INLP 构造子空间并正交移除；四项结局齐全。
+- [ ] **BOUND-01**: 2 层 MLP Hidden=256 ReLU 步尾边界检测器。
+- [ ] **T2NOOP-01**: 原版/注入配对，位置与表面相关度分层；项目派生名不得冒称官方 NoOp。
+- [ ] **TABLE1-01**: 主文 5 条对照与附录 3 条基线分列实现。
+- [ ] **WEEK1-01**: 三轨迹配置、50 条干预冒烟、噪声扣除后的首次 ρ 计数作为可运行入口，不是已测结果。
+- [ ] **EXEC-01**: 科学评测禁用门控/Fallback；验证器只离线评分。
+- [ ] **R7-01**: 步前显著低于步尾时记录主张回退分叉，不伪造“已经决定”。
+- [ ] **R4-01**: 监督文本接近探针时记录主文重心转移，不删除功能证据路径。
+- [ ] **REST-01**: 步前可解码不得写成已经决定。
+- [ ] **REST-02**: P3 未检出不得写成虚假依赖只是后果。
+- [ ] **REST-03**: 单点无响应不得写成任意联合编辑 soundness。
+
 ## Out of Scope
 Real GPU experiments, dataset/weight downloads on this machine, RL, production gates/fallback, publication.
 
 ## Traceability
 | Requirement | Phase | Status |
 |---|---|---|
-| DATA-01 | 1 | Pending |
-| DATA-02 | 1 | Pending |
-| DATA-03 | 1 | Pending |
-| MEAS-01 | 1 | Pending |
-| MEAS-02 | 1 | Pending |
-| MODEL-01 | 2 | Pending |
-| PROBE-01 | 3 | Pending |
-| BASE-01 | 3 | Pending |
-| XFER-01 | 3 | Pending |
-| CAUSAL-01 | 4 | Pending |
-| CAUSAL-02 | 4 | Pending |
-| C3-01 | 5 | Pending |
-| REPAIR-01 | 5 | Pending |
-| OPS-01 | 6 | Pending |
-| QA-01 | 6 | Pending |
-| DECIDE-01 | 6 | Pending |
+| DATA-01 | 1 | implemented_local / pending_server |
+| DATA-02 | 1 | implemented_local / pending_server |
+| DATA-03 | 1 | implemented_local |
+| MEAS-01 | 1 | implemented_local |
+| MEAS-02 | 1 | implemented_local |
+| MODEL-01 | 2 | implemented_local_tiny / pending_server_weights |
+| PROBE-01 | 3 | implemented_local / pending_server_fit |
+| BASE-01 | 3 | implemented_local |
+| XFER-01 | 3 | implemented_local |
+| CAUSAL-01 | 4 | implemented_local / pending_server_donors |
+| CAUSAL-02 | 4 | implemented_local_schema / outcomes pending_server |
+| C3-01 | 5 | tools_implemented / not_evaluated |
+| REPAIR-01 | 5 | implemented_local |
+| OPS-01 | 6 | implemented_local |
+| QA-01 | 6 | local_tests_exist_not_acceptance / independent_review_round06 |
+| DECIDE-01 | 6 | unregistered_null_path |
 
 Coverage: 16 requirements, 16 mapped, 0 unmapped. Status only becomes Complete after implemented and verified.

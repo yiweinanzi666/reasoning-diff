@@ -10,6 +10,8 @@ build/
 dist/
 data/
 runs/
-models/
+/models/
 .env
 .planning/research/.cache/
+/.planning/audits/round-*/_*
+/does_not_matter_offline_sci/

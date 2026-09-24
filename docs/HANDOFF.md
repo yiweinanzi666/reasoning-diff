@@ -1,42 +1,37 @@
-# 同事实施交接
+# 实施交接
 
 ## 本次边界
 
-用户最新明确要求只建立 `gsd-new-project`。此仓库仅交付项目初始化文档；先前开始的源码与测试已撤回，不应作为已交付实现。所有功能验收状态为 Pending，没有实验成功声明。
+2026-09-20 仅建立 `gsd-new-project`。2026-09-21 用户授权从初始化进入完整实现、本机验证与真实 subagent 多路审查。
 
 原始论文文件 SHA-256：`F3C0EC087B5BF4E503DB35F4D234C727DF3CE66F933E80781C69A0CC312EA57C`。
 
+## 本机验证（2026-09-21）
+
+- `python -m pytest -q` → 167 passed, exit 0（作者复跑；独立审查须自跑）。
+- 当前冻结：`5097c8310b023492eda617986ce11a956309a6452cc00121e0e90167a6f7aceb`（61 files，见 `.planning/audits/round-21/VERSION.md`）。
+- F20-01/02：intervene hook 长度间谍；calibrate 实跑忽略兄 `lab`。r01–r20 旧 hash 不计连续通过。Goal 未完成。
+
+## 当前代码入口
+
+```
+pip install -e .[dev]
+python -m pytest tests -q --tb=short
+reasoning-diff prepare --fixture tests/fixtures/t1_tiny.json --out-dir runs/prepare
+```
+
+其余子命令见 `docs/SERVER_RUNBOOK.md`。
+
 ## 已确认
 
-- 后续完整范围包含 T2/T3，不仅 T1 最小入口；T4 和附录局部重算也在框架内。
-- 本机没有真实实验条件；环境部署、权重与数据下载、GPU 验证等待服务器。
-- Gate 0–2 定义和阈值未提供，保留待预注册状态，不由实现者猜测。
-- 先建立可核查测量，再检验 C3、迁移及因果主张。研究假说允许失败。
-- 原始材料中的建议、预期数值和结尾提问不是额外操作授权。
+- 完整范围含 T2/T3 真实适配器；缺图为 unknown/partial。
+- 本机没有真实实验条件；GPU/权重/官方全量数据等待服务器。
+- Gate 0–2 保持未预注册。
+- HumanEval 默认 `executor_unavailable`，无宿主 exec。
 
-## 接手顺序
+## 需要研究者补齐的资产
 
-1. 读 `PROJECT.md`、`REQUIREMENTS.md`、`research/SUMMARY.md` 和 `docs/EXPERIMENT_PROTOCOL.md`。
-2. 从 `$gsd-plan-phase 1` 制定可执行计划；本次未创建 PLAN.md 或执行后续阶段。
-3. 先定义数据合同和独立真值资产，再写适配器/模型接口；不要求先租 GPU。
-4. 实现期间以本机单元测试及微型模型测试检查逻辑和接口；将真实服务器验收另列，不能写成已通过。
-5. 真实采集前冻结模型/数据 revision、拆分、允许扰动、噪声机会、方向拟合、校准和统计方案。
-
-## 需要研究者补齐、不能由代码凭空生成的资产
-
-- 自然语言任务的独立事件身份和任务依赖标注；歧义/不完整情况的明确标签。
-- 每个语义编辑对应的有效性和更新后答案，no-op 的无关性说明，来源交换的高层响应表。
-- Gate 的正式定义和通过标准；P1–P3 的统计标准、预算和多重比较规则。
-- 服务器型号、显存、可用模型和数据路径，执行 HumanEval 类代码的隔离环境。
-
-这些是未来阶段需显式解决的输入，不是本次初始化失败，也不应让同事用假数据或任意默认值补齐。
-
-## 初始化检查记录
-
-- 14 个核心文档均存在且非空；配置为有效 JSON，自动推进和自动链均关闭。
-- 16 项需求在 6 阶段中各映射一次，0 项遗漏，所有功能状态为 Pending。
-- 已检查核心文档的本地 Markdown 链接，0 个失效；原始论文 SHA-256 与收尾时一致。
-- 当前交付树的实现 `.py`、测试 `.py` 与 `pyproject.toml` 均不存在；临时研究/测试缓存不纳入 Git。
-- GSD `init.new-project` 返回 `init_incomplete=false`、`has_existing_code=false`；研究摘要检查返回 `passed=true`。
-- 摘要检查器把文中的外部数据/模型 revision 当成本地 commit 引用，附带了找不到本地提交的提示；这些 revision 是一手来源地址的一部分，不是本仓库的实现提交。
-- 本机 GSD 另提示 Codex 的静态 agent 配置与项目模型设置的更新时间不同。项目采用 inherit，未修改或重装用户全局环境；同事若要更换 agent 模型，需自行检查其运行时配置。
+- 自然语言任务的独立事件 DAG 侧车。
+- 每个语义编辑的有效性与更新答案。
+- Gate 正式定义与 P1–P3 预注册规则。
+- Linux 隔离执行器与服务器路径。
